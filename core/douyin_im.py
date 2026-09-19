@@ -45,6 +45,18 @@ logger = setup_logger("douyin_im", level=get_config().get("logLevel", "Info"))
 # 单次调用超过这么多秒就告警（Playwright 默认超时 120s，静默等到那时日志会一片空白）
 SLOW_CALL_SECONDS = 3.0
 
+# UI 微操（点击 / 可见性判断 / 滚动到视野）单独用的短超时，毫秒。
+#
+# 这些调用默认继承 context 的 default_timeout（= BROWSER_ACTION_TIMEOUT，默认 120 秒），
+# 而 120 秒本来是给「导航」准备的预算。虚拟列表重排、或编辑器还没挂载完成时，
+# 元素会短暂处于 unstable 状态，Playwright 的可操作性检查（actionability）就会
+# 把整段 120 秒干等到耗尽才动手。
+#
+# 实测代价：选中会话 56s、输入框点击 123s，22 个目标一轮要 66 分钟 ——
+# 远超 GitHub Actions 的 40 分钟上限，上线后必然被超时掐断。
+# 这类操作本就该秒级完成，给它们一个短超时，超时就重试或降级到 JS 兜底。
+UI_ACTION_TIMEOUT_MS = 8000
+
 
 def _brief(exc) -> str:
     """异常压成一行（Playwright 的异常常带多行 Call log）。"""
@@ -535,13 +547,34 @@ def scrape_ssr(html):
         if raw.get("not_exist_login_cookie") is None:
             raw["not_exist_login_cookie"] = _take(
                 v, r'"not_exist_login_cookie"\s*:\s*(true|false)')
+        # "user":{"isLogin":false,"statusCode":8,...} —— statusCode 8 是官方未登录码
+        # （与下方 _envelope_code 注释里 ERROR_USER_NOT_LOGIN 同源）
+        if raw.get("login_status_code") is None:
+            raw["login_status_code"] = _take(
+                v, r'"user"\s*:\s*\{\s*"isLogin"\s*:\s*(?:true|false)\s*,\s*"statusCode"\s*:\s*(\d+)')
 
-    out["user_id"] = raw.get("odin_user_id") or raw.get("uid")
+    # 真 uid 优先。odin_user_id 是**匿名访客 ID**，不是登录用户 uid，
+    # 不能反过来压过 uid —— 否则 addressable 会话里取 peer uid 会算错人。
+    out["user_id"] = raw.get("uid") or raw.get("odin_user_id")
+    out["visitor_id"] = raw.get("odin_user_id")
     out["sec_uid"] = raw.get("sec_uid")
-    if out["user_id"] and out["user_id"] != "0":
-        out["verdict"] = "logged_in"
-    elif raw.get("is_login") == "false" or raw.get("not_exist_login_cookie") == "true":
+
+    # ★ 判定顺序是本函数最容易写错的地方：明确的「未登录」信号必须排在最前。
+    #
+    # odin_user_id 在未登录时照样有值，而且是每次刷新都变的随机数 —— 实测三次：
+    #   1993873787982888 / 1817951927286760 / 2574415927984608
+    # 同一个 JSON 里抖音就明确标了 "not_exist_login_cookie":true、
+    # "user":{"isLogin":false,"statusCode":8}，secUid 压根不出现。
+    #
+    # 旧实现把 `if out["user_id"]` 排在首位，于是未登录恒判 logged_in：
+    #   既不打印「Cookie 失效」，也不提前退出，一路走到会话列表扫描，
+    #   会话数为 0 → 空转到 IM_READY_TIMEOUT → 静默失败。本次失效的主因之一。
+    if (raw.get("is_login") == "false"
+            or raw.get("not_exist_login_cookie") == "true"
+            or raw.get("login_status_code") == "8"):
         out["verdict"] = "logged_out"
+    elif out["user_id"] and out["user_id"] != "0":
+        out["verdict"] = "logged_in"
     elif not out["user_id"] and raw.get("is_login") is None:
         out["verdict"] = "logged_out"
     return out
@@ -750,8 +783,17 @@ class ImMonitor:
         if r["verdict"] == "logged_in" or self.login["verdict"] == "unknown":
             self.login = r
         label = {"logged_in": "✅ 已登录", "logged_out": "⛔ 未登录", "unknown": "❓ 未知"}
-        logger.info(f"[LOGIN] {label.get(self.login['verdict'])}  user_id={self.login['user_id'] or '-'}"
-                    + (f"  nickname={self.login['nickname']}" if self.login["nickname"] else ""))
+        li = self.login
+        extra = ""
+        if li["verdict"] == "logged_in":
+            extra = f"  user_id={li['user_id'] or '-'}"
+            if li.get("nickname"):
+                extra += f"  nickname={li['nickname']}"
+        elif li["verdict"] == "logged_out" and li.get("visitor_id"):
+            # visitor_id 是匿名访客 ID（每次刷新都变），当 user_id 打印会让人
+            # 误以为"已经有用户了、只是别的地方出错"，排查方向直接被带偏。
+            extra = f"  （当前是匿名访客 {li['visitor_id']}，不代表已登录）"
+        logger.info(f"[LOGIN] {label.get(li['verdict'])}{extra}")
 
     def _handle_send(self, body):
         r = decode_send_resp(body)
@@ -1500,7 +1542,17 @@ class DouyinIM:
         el = handle.as_element()
         if el is None:
             raise RuntimeError(f"下标 #{index} 上没有会话元素")
-        el.scroll_into_view_if_needed()
+        try:
+            # 虚拟列表滚动期间元素会短暂 unstable，默认超时（120s）会被白白耗尽
+            el.scroll_into_view_if_needed(timeout=UI_ACTION_TIMEOUT_MS)
+        except Exception as e:
+            # 降级：直接用 JS 把该行滚进视野，拿不到位置再抛错
+            logger.debug(f"[SEL] scroll_into_view 超时（{_brief(e)}），改用 JS 滚动")
+            self.page.evaluate(
+                "(i) => { const el = document.querySelectorAll("
+                "'[data-e2e=\"conversation-item\"]')[i];"
+                " if (el) el.scrollIntoView({block:'center'}); }", index)
+            self.page.wait_for_timeout(150)
         box = el.bounding_box()
         if not box:
             raise RuntimeError(f"下标 #{index} 的元素不可见")
@@ -1556,7 +1608,19 @@ class DouyinIM:
         editor = self._editor()
         if editor is None:
             raise RuntimeError("找不到聊天输入框")
-        editor.click()
+        try:
+            editor.click(timeout=UI_ACTION_TIMEOUT_MS)
+        except Exception as e:
+            # 刚切换会话时编辑器可能还没挂载完，click 的可操作性检查会一直等。
+            # Draft.js 真正依赖的是键盘事件，用 JS 直接聚焦同样能输入。
+            logger.debug(f"[SEND] 点击输入框超时（{_brief(e)}），改用 JS 聚焦")
+            focused = self.page.evaluate(
+                "() => { const el = document.querySelector("
+                "'[data-e2e=\"msg-input\"] .public-DraftEditor-content')"
+                " || document.querySelector('.DraftEditor-root [contenteditable=\"true\"]');"
+                " if (el) { el.focus(); return true; } return false; }")
+            if not focused:
+                raise RuntimeError("输入框既点不动也聚焦不了")
         # 两种换行都认（口径见 split_message_lines 的文档）
         lines = split_message_lines(text)
         if text != "\n".join(lines):
@@ -1606,7 +1670,7 @@ class DouyinIM:
                     '.messageEditorimChatEditorContainer'):
             try:
                 loc = self.page.locator(sel).first
-                if loc.count() > 0 and loc.is_visible():
+                if loc.count() > 0 and loc.is_visible(timeout=UI_ACTION_TIMEOUT_MS):
                     return loc
             except Exception:
                 continue
@@ -1621,8 +1685,8 @@ class DouyinIM:
     def _click_send(self):
         try:
             btn = self.page.locator(SEL_SEND_BTN_READY).first
-            if btn.count() > 0 and btn.is_visible():
-                btn.click()
+            if btn.count() > 0 and btn.is_visible(timeout=UI_ACTION_TIMEOUT_MS):
+                btn.click(timeout=UI_ACTION_TIMEOUT_MS)
                 return "button"
         except Exception:
             pass
