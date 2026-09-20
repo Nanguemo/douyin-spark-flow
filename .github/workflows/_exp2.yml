@@ -1,0 +1,15 @@
+# 隔离实验 2：仅测试 toJson(secrets) / toJson(vars) 引用（不用 checkout）
+name: _exp2_secrets
+
+on: push
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          VARS_JSON: ${{ toJson(vars) }}
+          SECRETS_JSON: ${{ toJson(secrets) }}
+        run: |
+          echo "vars len: ${#VARS_JSON}"
+          echo "secrets len: ${#SECRETS_JSON}"

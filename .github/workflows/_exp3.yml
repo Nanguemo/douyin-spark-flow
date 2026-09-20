@@ -1,0 +1,18 @@
+# 隔离实验 3：仅测试顶层 env 块 + branches 过滤（不用 checkout、不引用 secrets）
+name: _exp3_env
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CLOAK_CHROMIUM_VERSION: 146.0.7680.177.5
+  CLOAKBROWSER_AUTO_UPDATE: "false"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "exp3 ok  chromium=$CLOAK_CHROMIUM_VERSION"

@@ -1,0 +1,14 @@
+# 隔离实验 1：仅测试 actions/checkout + setup-python（不引用 secrets/vars）
+name: _exp1_checkout
+
+on: push
+
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: echo "exp1 ok"
