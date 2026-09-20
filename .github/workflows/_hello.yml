@@ -1,0 +1,11 @@
+# 隔离实验：最简 workflow，用于判断 action_required 是账户级还是配置级问题。
+# 若这个也失败，说明问题与我们的代码无关。验证后删除。
+name: _hello
+
+on: push
+
+jobs:
+  hi:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "hello from github actions"
