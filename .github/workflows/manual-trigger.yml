@@ -1,0 +1,40 @@
+# 手机一键续火花（手动触发）
+#
+# 设计要点：这个 workflow **不登录抖音、不发任何消息**，只往仓库里写一个时间戳文件。
+# 本机每隔几分钟来取这个文件，发现有新信号就跑一次续火花。
+#
+# 为什么不直接在云端发：实测机房/数据中心 IP（GitHub Actions 与云服务器都一样）
+# 一旦登录抖音并尝试发送，就会被风控拦截，并且**注销 sessionid**，
+# 导致本机的定时任务也一起失效。所以云端只当"信号中转"，脏活留给家里的网络。
+name: 手机一键续火花
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  write-signal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 写入触发信号
+        run: |
+          mkdir -p signal
+          TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "$TS" > signal/trigger.txt
+          echo "信号时间(UTC): $TS"
+
+      - name: 推送信号文件
+        run: |
+          git config user.name "spark-bot"
+          git config user.email "spark-bot@users.noreply.github.com"
+          git add signal/trigger.txt
+          if git diff --cached --quiet; then
+            echo "信号未变化，跳过提交"
+          else
+            git commit -m "signal: 手机手动触发续火花"
+            git push
+          fi
