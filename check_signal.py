@@ -67,8 +67,10 @@ def main():
     with open(STATE, "w", encoding="utf-8") as f:
         f.write(remote)
 
+    # 走 run_daily_once 而不是直接 main.py：手机触发、9 点定时、开机自启
+    # 三种入口共用「今天是否已成功」的标记，一天最多只发一轮。
     ret = subprocess.call(
-        [sys.executable, os.path.join(ROOT, "main.py"), "task"], cwd=ROOT)
+        [sys.executable, os.path.join(ROOT, "run_daily_once.py")], cwd=ROOT)
     log(f"续火花执行完毕，退出码={ret}")
     return ret
 
