@@ -1,3 +1,4 @@
+import sys
 import traceback
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
@@ -56,7 +57,10 @@ def do_user_task(browser, username, cookies, targets):
                 "ERROR": "内部错误",
             }.get(res.get("status"), res.get("status"))
             logger.error(f"账号 {username} 操作前检查未通过：{reason}，跳过该账号")
-            return
+            # 返回 False 让 runTasks 记一笔失败，最终以非零码退出。
+            # 否则无人值守时（GitHub Actions 定时跑）Cookie 过期会表现为
+            # 「每天运行成功、一条消息没发」，GitHub 不会发任何告警。
+            return False
 
         logger.info(
             f"账号 {username} 门禁通过  user_id={res.get('user_id')} "
@@ -119,6 +123,13 @@ def do_user_task(browser, username, cookies, targets):
                 f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
                 f"主列表扫不到，目标可能被折叠"
             )
+
+        # 一条都没发出去 = 这次续火花实质失败，必须让它变成显式告警；
+        # 只有部分失败（有人没发出）时降级为警告，不算整体失败。
+        if sent_ok == 0 and sent_fail > 0:
+            logger.error(f"账号 {username}：{sent_fail} 个目标全部发送失败")
+            return False
+        return True
     finally:
         if im is not None:
             try:
@@ -140,6 +151,11 @@ def runTasks():
             f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
         )
 
+    # 无人值守（GitHub Actions 定时跑）时，如果账号整体没跑起来却仍以 0 退出，
+    # 表现为「每天运行成功、一条消息没发」，而 GitHub 只在 workflow 失败时告警。
+    # 这里收集失败账号，最后以非零码退出，把静默失败变成一次显式告警。
+    failed = []
+
     for user in userData:
         cookies = user["cookies"]
         # 归一化在**这里**做（配置读取端不做）：DouyinIM._match 内部用同一套 norm，
@@ -152,9 +168,19 @@ def runTasks():
         # 创建任务
         try:
             browser = get_browser(fingerprint)
-            do_user_task(browser, username, cookies, targets)
-            logger.info(f"账号 {username} 任务完成")
+            ok = do_user_task(browser, username, cookies, targets)
+            if ok:
+                logger.info(f"账号 {username} 任务完成")
+            else:
+                failed.append(username)
         finally:
             # 关闭浏览器实例
             browser.close()
+
+    if failed:
+        logger.error(
+            f"以下账号未能执行，需要人工处理: {failed}"
+            f"（最常见原因是 Cookie 过期，请重新导出抖音 Cookie 更新到 Secrets）"
+        )
+        sys.exit(1)
     
