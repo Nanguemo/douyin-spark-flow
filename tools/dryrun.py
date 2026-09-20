@@ -7,16 +7,20 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+ROOT = os.path.dirname(HERE)   # 项目根目录（utils/ core/ 都在这一层）
+# 必须把**项目根**加进 sys.path：本文件在 tools/ 子目录，
+# 指向 HERE 的话 import utils / core 会直接 ModuleNotFoundError。
+sys.path.insert(0, ROOT)
 
-if os.path.exists(os.path.join(HERE, ".env")):
+ENV_FILE = os.path.join(ROOT, ".env")
+if os.path.exists(ENV_FILE):
     from dotenv import load_dotenv
 
-    load_dotenv(os.path.join(HERE, ".env"))
+    load_dotenv(ENV_FILE)
 
-# 强制无头：干跑在后台执行，且 GitHub Actions 上跑的就是无头环境
+# 强制无头：干跑在 CI/后台执行，GitHub Actions 上跑的就是无头环境
 os.environ["DEBUG"] = "false"
-os.environ["CLOAKBROWSER_AUTO_UPDATE"] = "false"
+os.environ.setdefault("CLOAKBROWSER_AUTO_UPDATE", "false")
 
 from utils.config import get_config, get_userData  # noqa: E402
 from utils.logger import setup_logger  # noqa: E402
