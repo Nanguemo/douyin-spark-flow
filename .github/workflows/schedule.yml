@@ -99,13 +99,19 @@ jobs:
         "$HOME/cloakbrowser/chrome" --version
         echo "CLOAKBROWSER_BINARY_PATH=$HOME/cloakbrowser/chrome" >> "$GITHUB_ENV"
 
-    - name: Export Github Environment Variables and Secrets to JSON
-      env:
-        VARS_JSON: ${{ toJson(vars) }}
-        SECRETS_JSON: ${{ toJson(secrets) }}
-      run: python utils/export_github_env.py
-
+    # ⚠️ 这里刻意**不用** ${{ toJson(secrets) }} 批量导出。
+    # 实测：该写法会让 GitHub 把整个 run 判为 action_required（需要人工审批），
+    # job 连创建都不会被创建 —— run 列表里显示黄色 "Action required"，
+    # 且网页上没有任何可点的批准按钮，定时任务等于彻底失效。
+    # 隔离实验对照：只有引用 toJson(secrets) 的那个 workflow 失败，
+    # checkout / setup-python / env / branches 过滤全部正常。
+    # 改为逐个显式传递；以后新增账号时，在下面补一行 COOKIES_<抖音号> 即可。
     - name: Run DouYin Spark Flow
+      env:
+        TASKS: ${{ vars.TASKS }}
+        MESSAGE_TEMPLATE: ${{ vars.MESSAGE_TEMPLATE }}
+        LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+        COOKIES_ZKX051118: ${{ secrets.COOKIES_ZKX051118 }}
       run: python main.py task
 
     - uses: actions/upload-artifact@v4

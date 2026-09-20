@@ -48,11 +48,11 @@ jobs:
         "$HOME/cloakbrowser/chrome" --version
         echo "CLOAKBROWSER_BINARY_PATH=$HOME/cloakbrowser/chrome" >> "$GITHUB_ENV"
 
-    - name: Export Github Environment Variables and Secrets to JSON
-      env:
-        VARS_JSON: ${{ toJson(vars) }}
-        SECRETS_JSON: ${{ toJson(secrets) }}
-      run: python utils/export_github_env.py
-
+    # 同上：不用 toJson(secrets)，改为逐个显式传递
     - name: 干跑（只扫描，不发送）
+      env:
+        TASKS: ${{ vars.TASKS }}
+        MESSAGE_TEMPLATE: ${{ vars.MESSAGE_TEMPLATE }}
+        LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+        COOKIES_ZKX051118: ${{ secrets.COOKIES_ZKX051118 }}
       run: python tools/dryrun.py
