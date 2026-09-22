@@ -1,4 +1,7 @@
+import os
+import random
 import sys
+import time
 import traceback
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
@@ -68,6 +71,11 @@ def do_user_task(browser, username, cookies, targets):
         )
 
         sent_ok = sent_fail = 0
+        # 分批发送：一口气连发十几个会话，是最容易被判定为"群发"的特征。
+        # 每发满 batch_size 个就歇一会儿（时长随机），让节奏更像真人。
+        # 设 BATCH_SIZE=0 可关闭该行为。
+        batch_size = int(os.getenv("BATCH_SIZE", "6"))
+        batch_pause = float(os.getenv("BATCH_PAUSE_SEC", "25"))
 
         # 生成器：yield 出来的那一刻，对应好友的会话已经被选中
         for friend in im.iter_find_and_select(targets):
@@ -99,6 +107,14 @@ def do_user_task(browser, username, cookies, targets):
                     logger.warning(traceback.format_exc())
             # 发送完让列表状态落定，再继续滚动（发送会把该会话移到顶部）
             page.wait_for_timeout(800)
+
+            done = sent_ok + sent_fail
+            if batch_size > 0 and done > 0 and done % batch_size == 0:
+                pause = batch_pause * (0.6 + 0.8 * random.random())
+                logger.info(
+                    f"已发 {done} 个，分批暂停 {pause:.0f}s（降低群发特征）"
+                )
+                time.sleep(pause)
 
         scan = im.last_scan or {}
         logger.info(
