@@ -4,9 +4,15 @@ name: DouYin Spark Flow Schedule Run
 # 配置来自 Variables / Secrets（Environment: user-data），由 export_github_env.py
 # 经 toJson 注入进程环境 —— COOKIES_<抖音号> 键名跟着账号走，没法逐条写 env 映射。
 on:
-  workflow_dispatch: # 允许手动触发
-  schedule: # 定时任务
-    - cron: "0 1 * * *" # 每天 1:00 UTC（对应北京时间 9:00）
+  workflow_dispatch: # 只保留手动触发
+  # ⚠️ 定时触发已**关闭**，请勿恢复。
+  # 原因：本方案的实际执行机是家里的电脑（Windows 计划任务，每天 0 点）。
+  # 云端每小时/每天的定时任务会用自己的 IP 登录同一个抖音账号，导致：
+  #   1) 同一账号两地登录 → 抖音判定异常 → 把会话踢掉（本地 Cookie 因此频繁失效）
+  #   2) 云端 IP 属机房，发送必被风控拦 → 每次都以 failure 结束，天天发失败邮件
+  # 需要云端执行时用「Actions → 手动 Run workflow」即可。
+  # schedule:
+  #   - cron: "0 1 * * *" # 每天 1:00 UTC（北京时间 9:00）
 
 # 同一账号并发登录会把会话挤掉
 concurrency:
